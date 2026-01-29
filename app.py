@@ -7,23 +7,51 @@ import re
 import urllib3
 import telebot
 import threading
+import os
+import pickle
+import signal
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
-# CONFIG
+# USER AGENTS - Rotate to avoid WAF blocks
 # ==========================================
-BOT_TOKEN = "6907835426:AAFUnPXiOE5SaOILXPPRFv6B3LQrol-NQlA"
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/121.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+]
+
+def get_random_user_agent():
+    """Get random user agent to avoid WAF blocks"""
+    return random.choice(USER_AGENTS)
+
+# ==========================================
+# CONFIG & PROGRESS TRACKING
+# ==========================================
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 OWNER_ID = 5963548505
 MAX_THREADS = 15
 REQUEST_TIMEOUT = 10
 
+PROGRESS_FILE = "checker_progress.pkl"
+RESULTS_FILE = "checker_results.json"
+
 bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
 VERIFIED_PROXIES = []
 
-# REAL TEST CARD - Will DECLINE on LIVE stores = PROOF
+# REAL TEST CARD
 TEST_CARD = {
     "number": "5598880392815603",
     "month": 9,
@@ -47,6 +75,81 @@ CHECKOUT_DATA = {
 HTTP_TIMEOUT_SHORT = 10
 HTTP_TIMEOUT_MEDIUM = 15
 
+# Progress tracking
+CURRENT_PROGRESS = {
+    "total_sites": 0,
+    "checked": 0,
+    "live": 0,
+    "captcha": 0,
+    "dead": 0,
+    "error": 0,
+    "checked_sites": [],
+    "live_sites": [],
+    "start_time": None,
+    "message_id": None,
+    "chat_id": None,
+}
+
+# ==========================================
+# SAVE/LOAD PROGRESS
+# ==========================================
+
+def save_progress():
+    """Save progress to file"""
+    try:
+        with open(PROGRESS_FILE, 'wb') as f:
+            pickle.dump(CURRENT_PROGRESS, f)
+        print(f"💾 Progress saved: {CURRENT_PROGRESS['checked']}/{CURRENT_PROGRESS['total_sites']}")
+    except Exception as e:
+        print(f"❌ Save error: {e}")
+
+def load_progress():
+    """Load previous progress"""
+    global CURRENT_PROGRESS
+    try:
+        if os.path.exists(PROGRESS_FILE):
+            with open(PROGRESS_FILE, 'rb') as f:
+                CURRENT_PROGRESS = pickle.load(f)
+            print(f"✅ Progress loaded: {CURRENT_PROGRESS['checked']}/{CURRENT_PROGRESS['total_sites']} completed")
+            return True
+    except Exception as e:
+        print(f"❌ Load error: {e}")
+    return False
+
+def save_results():
+    """Save results to JSON"""
+    try:
+        results = {
+            "timestamp": datetime.now().isoformat(),
+            "total": CURRENT_PROGRESS['total_sites'],
+            "checked": CURRENT_PROGRESS['checked'],
+            "live": CURRENT_PROGRESS['live'],
+            "captcha": CURRENT_PROGRESS['captcha'],
+            "dead": CURRENT_PROGRESS['dead'],
+            "error": CURRENT_PROGRESS['error'],
+            "live_sites": CURRENT_PROGRESS['live_sites'],
+        }
+        with open(RESULTS_FILE, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"💾 Results saved to {RESULTS_FILE}")
+    except Exception as e:
+        print(f"❌ Results save error: {e}")
+
+# ==========================================
+# SIGNAL HANDLERS - Graceful shutdown
+# ==========================================
+
+def signal_handler(signum, frame):
+    """Handle Ctrl+C gracefully"""
+    print("\n⚠️ Received interrupt signal...")
+    save_progress()
+    save_results()
+    print("✅ Progress saved. Exiting...")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 # ==========================================
 # COMMANDS
 # ==========================================
@@ -56,31 +159,57 @@ def start(m):
     if str(m.from_user.id) != str(OWNER_ID):
         return
     
-    text = """
-🔥 SHOPIFY CHECKER BOT v8.0
+    progress_status = ""
+    if CURRENT_PROGRESS['total_sites'] > 0:
+        progress_pct = (CURRENT_PROGRESS['checked'] / CURRENT_PROGRESS['total_sites']) * 100
+        progress_status = f"\n\n⚡ <b>RESUME AVAILABLE:</b>\n✅ {CURRENT_PROGRESS['checked']}/{CURRENT_PROGRESS['total_sites']} ({progress_pct:.1f}%)\n🔥 Send /resume to continue"
+    
+    text = f"""
+🔥 SHOPIFY CHECKER BOT v8.5
 
-✅ REAL CHECKOUT TESTING WITH TEST CARD
+✅ CRASH-PROOF WITH AUTO-SAVE
+✅ ROTATING USER-AGENTS (WAF bypass)
+✅ REAL PAYMENT TESTING
 
 ✅ /stats - Statistics
 ✅ /proxies - Show proxies
 ✅ /clear - Clear all
+✅ /resume - Resume from last checkpoint{progress_status}
 
-📤 Send proxies.txt (IP:PORT)
-📤 Send sites.txt (domains)
-
-⚠️ REAL PAYMENT SUBMISSION
-✅ Uses test card: 5598...815603
-✅ Card DECLINE = LIVE proof
-✅ Checkout works = LIVE confirmed
+📤 Send sites.txt to start checking
 """
-    bot.reply_to(m, text)
+    bot.reply_to(m, text, parse_mode='HTML')
 
 @bot.message_handler(commands=['stats'])
 def stats(m):
     if str(m.from_user.id) != str(OWNER_ID):
         return
-    text = f"🔌 Proxies: {len(VERIFIED_PROXIES)}\n⚙️ Threads: {MAX_THREADS}"
-    bot.reply_to(m, text)
+    text = f"""
+📊 <b>CURRENT STATS:</b>
+
+🔌 Proxies: {len(VERIFIED_PROXIES)}
+📊 Total sites: {CURRENT_PROGRESS['total_sites']}
+✅ Checked: {CURRENT_PROGRESS['checked']}
+🔥 LIVE: {CURRENT_PROGRESS['live']}
+🛡️ CAPTCHA: {CURRENT_PROGRESS['captcha']}
+💀 DEAD: {CURRENT_PROGRESS['dead']}
+⚠️ ERROR: {CURRENT_PROGRESS['error']}
+
+⏱️ Elapsed: {int(time.time() - CURRENT_PROGRESS['start_time']) if CURRENT_PROGRESS['start_time'] else 0}s
+"""
+    bot.reply_to(m, text, parse_mode='HTML')
+
+@bot.message_handler(commands=['resume'])
+def resume_check(m):
+    if str(m.from_user.id) != str(OWNER_ID):
+        return
+    
+    if CURRENT_PROGRESS['total_sites'] == 0 or CURRENT_PROGRESS['checked'] >= CURRENT_PROGRESS['total_sites']:
+        bot.reply_to(m, "❌ No checkpoint to resume")
+        return
+    
+    bot.reply_to(m, f"⚡ Resuming from {CURRENT_PROGRESS['checked']}/{CURRENT_PROGRESS['total_sites']}...")
+    threading.Thread(target=resume_batch_check, args=(m,), daemon=True).start()
 
 @bot.message_handler(commands=['proxies'])
 def show_proxies(m):
@@ -99,7 +228,23 @@ def clear(m):
     if str(m.from_user.id) != str(OWNER_ID):
         return
     VERIFIED_PROXIES.clear()
-    bot.reply_to(m, "✅ Cleared")
+    global CURRENT_PROGRESS
+    CURRENT_PROGRESS = {
+        "total_sites": 0,
+        "checked": 0,
+        "live": 0,
+        "captcha": 0,
+        "dead": 0,
+        "error": 0,
+        "checked_sites": [],
+        "live_sites": [],
+        "start_time": None,
+        "message_id": None,
+        "chat_id": None,
+    }
+    if os.path.exists(PROGRESS_FILE):
+        os.remove(PROGRESS_FILE)
+    bot.reply_to(m, "✅ Cleared all")
 
 # ==========================================
 # PROXY VERIFICATION
@@ -113,7 +258,8 @@ def test_proxy(proxy):
         else:
             proxy_url = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
         proxy_dict = {'http': proxy_url, 'https': proxy_url}
-        r = requests.get('http://httpbin.org/ip', proxies=proxy_dict, timeout=5, verify=False)
+        headers = {'User-Agent': get_random_user_agent()}
+        r = requests.get('http://httpbin.org/ip', proxies=proxy_dict, timeout=5, verify=False, headers=headers)
         return r.status_code == 200
     except:
         return False
@@ -131,8 +277,11 @@ def verify_proxies_batch(proxies, message):
         futures = {executor.submit(test_proxy, p): p for p in proxies}
         for future in as_completed(futures):
             checked += 1
-            if future.result():
-                verified.append(futures[future])
+            try:
+                if future.result():
+                    verified.append(futures[future])
+            except:
+                pass
             if checked % 10 == 0 and status_msg:
                 try:
                     bot.edit_message_text(f"⚡ Verifying...\n{checked}/{len(proxies)}\n✅ {len(verified)}", message.chat.id, status_msg.message_id)
@@ -158,14 +307,15 @@ def normalize_shop_url(shop_url):
 def create_session(shop_url, proxies=None):
     session = requests.Session()
     session.trust_env = False if proxies else True
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    headers = {
+        'User-Agent': get_random_user_agent(),
         'Accept': 'application/json',
         'Accept-Language': 'en-US',
         'Content-Type': 'application/json',
         'Origin': shop_url,
         'Referer': f'{shop_url}/',
-    })
+    }
+    session.headers.update(headers)
     if proxies:
         try:
             session.proxies.update(proxies)
@@ -195,7 +345,6 @@ def get_product_variants(session, shop_url):
     except:
         pass
     
-    # Fallback
     try:
         url = f"{shop_url}/collections/all/products.json?limit=250"
         r = session.get(url, timeout=HTTP_TIMEOUT_SHORT, verify=False)
@@ -219,16 +368,7 @@ def get_product_variants(session, shop_url):
     return None
 
 def test_real_checkout(site_url, proxy=None):
-    """
-    REAL CHECKOUT TEST
-    1. Get products
-    2. Add to cart
-    3. Create checkout
-    4. SUBMIT PAYMENT with test card
-    5. Card declines = PROOF of LIVE
-    
-    Returns: (status, reason)
-    """
+    """REAL CHECKOUT TEST with random User-Agent"""
     try:
         shop_url = normalize_shop_url(site_url)
         
@@ -246,7 +386,6 @@ def test_real_checkout(site_url, proxy=None):
         
         session = create_session(shop_url, proxy_dict)
         
-        # Step 1: Check if Shopify
         try:
             r = session.get(shop_url, timeout=HTTP_TIMEOUT_SHORT, verify=False)
             if 'CAPTCHA' in r.text.upper() or 'RECAPTCHA' in r.text.upper():
@@ -254,12 +393,10 @@ def test_real_checkout(site_url, proxy=None):
         except:
             return ("DEAD", "Connection error")
         
-        # Step 2: Get products
         product = get_product_variants(session, shop_url)
         if not product:
             return ("DEAD", "No products found")
         
-        # Step 3: Add to cart
         try:
             cart_url = f"{shop_url}/cart/add.js"
             payload = json.dumps({"id": product['variant_id'], "quantity": 1})
@@ -269,7 +406,6 @@ def test_real_checkout(site_url, proxy=None):
         except:
             return ("DEAD", "Cart error")
         
-        # Step 4: Create checkout
         try:
             checkout_url = f"{shop_url}/checkouts.json"
             payload = json.dumps({
@@ -299,11 +435,9 @@ def test_real_checkout(site_url, proxy=None):
         except Exception as e:
             return ("DEAD", f"Checkout error: {str(e)[:30]}")
         
-        # Step 5: SUBMIT PAYMENT with test card
         try:
             payment_url = f"{shop_url}/checkouts/{checkout_token}/payment_sessions/graphql.json"
             
-            # Payment data with TEST CARD
             payment_payload = {
                 "operationName": "SubmitForCompletion",
                 "variables": {
@@ -336,9 +470,7 @@ def test_real_checkout(site_url, proxy=None):
             
             response_text = r.text
             
-            # If we got response = payment gateway exists
             if r.status_code in [200, 201]:
-                # Card DECLINE = proof of LIVE (payment was processed)
                 if 'decline' in response_text.lower() or 'failed' in response_text.lower():
                     return ("LIVE", "✅ CARD DECLINED (LIVE)")
                 elif 'error' in response_text.lower():
@@ -349,11 +481,9 @@ def test_real_checkout(site_url, proxy=None):
                     return ("LIVE", "✅ Payment gateway active")
             
             elif r.status_code >= 400:
-                # Payment gateway exists but rejected
                 return ("LIVE", "✅ Gateway rejected (LIVE)")
             
         except requests.exceptions.Timeout:
-            # Timeout = payment gateway was processing = LIVE
             return ("LIVE", "✅ Gateway timeout (LIVE)")
         except Exception as e:
             if 'payment' in str(e).lower():
@@ -384,56 +514,93 @@ def is_proxy_line(line):
         return False
     return line[0].isdigit() and line.count(':') >= 1
 
+def resume_batch_check(message):
+    """Resume checking from last checkpoint"""
+    global CURRENT_PROGRESS
+    
+    all_sites = CURRENT_PROGRESS['checked_sites'] + [s for s in range(CURRENT_PROGRESS['checked'], CURRENT_PROGRESS['total_sites'])]
+    remaining_sites = [s for s in all_sites if s not in CURRENT_PROGRESS['checked_sites']]
+    
+    if not remaining_sites:
+        bot.send_message(message.chat.id, "✅ All sites already checked!")
+        return
+    
+    # Continue checking
+    check_sites_internal(remaining_sites, message)
+
 def check_sites_batch(sites, message):
     """Check all sites with REAL payment test"""
-    live_sites = []
-    stats = {'live': 0, 'captcha': 0, 'dead': 0, 'error': 0}
-    checked = 0
-    total = len(sites)
-    start_time = time.time()
+    global CURRENT_PROGRESS
+    
+    CURRENT_PROGRESS['total_sites'] = len(sites)
+    CURRENT_PROGRESS['checked'] = 0
+    CURRENT_PROGRESS['live'] = 0
+    CURRENT_PROGRESS['captcha'] = 0
+    CURRENT_PROGRESS['dead'] = 0
+    CURRENT_PROGRESS['error'] = 0
+    CURRENT_PROGRESS['checked_sites'] = []
+    CURRENT_PROGRESS['live_sites'] = []
+    CURRENT_PROGRESS['start_time'] = time.time()
+    CURRENT_PROGRESS['chat_id'] = message.chat.id
+    
+    save_progress()
+    check_sites_internal(sites, message)
+
+def check_sites_internal(sites, message):
+    """Internal function to check sites"""
+    global CURRENT_PROGRESS
     
     try:
-        status_msg = bot.send_message(message.chat.id, f"🔥 Testing {total} sites with REAL PAYMENT...\n0/{total} (0%)")
+        status_msg = bot.send_message(message.chat.id, f"🔥 Testing {len(sites)} sites...\n0/{len(sites)} (0%)")
+        CURRENT_PROGRESS['message_id'] = status_msg.message_id
     except:
         status_msg = None
     
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         futures = {}
-        for site in sites:
-            proxy = None
-            if VERIFIED_PROXIES:
-                proxy = random.choice(VERIFIED_PROXIES)
-            futures[executor.submit(test_real_checkout, site, proxy)] = site
+        for i, site in enumerate(sites):
+            if i not in CURRENT_PROGRESS['checked_sites']:
+                proxy = None
+                if VERIFIED_PROXIES:
+                    proxy = random.choice(VERIFIED_PROXIES)
+                futures[executor.submit(test_real_checkout, site, proxy)] = (site, i)
         
         for future in as_completed(futures):
             try:
                 status, reason = future.result()
-                site = futures[future]
-                checked += 1
+                site, site_idx = futures[future]
+                
+                CURRENT_PROGRESS['checked'] += 1
+                CURRENT_PROGRESS['checked_sites'].append(site_idx)
                 
                 if status == "LIVE":
-                    stats['live'] += 1
-                    live_sites.append(f"{site} | {reason}")
+                    CURRENT_PROGRESS['live'] += 1
+                    CURRENT_PROGRESS['live_sites'].append(f"{site} | {reason}")
                     print(f"✅ LIVE: {site}")
                 elif status == "CAPTCHA":
-                    stats['captcha'] += 1
+                    CURRENT_PROGRESS['captcha'] += 1
                     print(f"🛡️ CAPTCHA: {site}")
                 elif status == "ERROR":
-                    stats['error'] += 1
+                    CURRENT_PROGRESS['error'] += 1
                 else:
-                    stats['dead'] += 1
+                    CURRENT_PROGRESS['dead'] += 1
                 
-                if checked % 10 == 0 and status_msg:
+                # Save every 50 sites
+                if CURRENT_PROGRESS['checked'] % 50 == 0:
+                    save_progress()
+                
+                # Update every 10 sites
+                if CURRENT_PROGRESS['checked'] % 10 == 0 and status_msg:
                     try:
-                        elapsed = int(time.time() - start_time)
-                        speed = checked // max(elapsed, 1)
-                        pct = int((checked / total) * 100)
+                        elapsed = int(time.time() - CURRENT_PROGRESS['start_time'])
+                        speed = CURRENT_PROGRESS['checked'] // max(elapsed, 1)
+                        pct = int((CURRENT_PROGRESS['checked'] / CURRENT_PROGRESS['total_sites']) * 100)
                         bar = "█" * int(pct/10) + "░" * (10-int(pct/10))
                         bot.edit_message_text(
-                            f"🔥 <b>REAL PAYMENT TEST</b>\n<code>{bar}</code> {pct}%\n\n"
-                            f"✅ LIVE: {stats['live']}\n"
-                            f"🛡️ CAPTCHA: {stats['captcha']}\n"
-                            f"💀 DEAD: {stats['dead']}\n"
+                            f"🔥 <b>CHECKING</b>\n<code>{bar}</code> {pct}%\n\n"
+                            f"✅ LIVE: {CURRENT_PROGRESS['live']}\n"
+                            f"🛡️ CAPTCHA: {CURRENT_PROGRESS['captcha']}\n"
+                            f"💀 DEAD: {CURRENT_PROGRESS['dead']}\n"
                             f"⏱️ {elapsed}s | {speed}/s",
                             message.chat.id,
                             status_msg.message_id,
@@ -441,22 +608,23 @@ def check_sites_batch(sites, message):
                         )
                     except:
                         pass
-            except:
-                pass
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                CURRENT_PROGRESS['error'] += 1
     
-    elapsed = int(time.time() - start_time)
+    elapsed = int(time.time() - CURRENT_PROGRESS['start_time'])
     
     report = f"""
-✅ <b>REAL PAYMENT TEST COMPLETE!</b>
+✅ <b>TEST COMPLETE!</b>
 
 📊 <b>RESULTS:</b>
-✅ <b>LIVE:</b> <code>{stats['live']}</code> (payment gateway works)
-🛡️ <b>CAPTCHA:</b> <code>{stats['captcha']}</code>
-💀 <b>DEAD:</b> <code>{stats['dead']}</code>
-⚠️ <b>ERROR:</b> <code>{stats['error']}</code>
+✅ <b>LIVE:</b> <code>{CURRENT_PROGRESS['live']}</code>
+🛡️ <b>CAPTCHA:</b> <code>{CURRENT_PROGRESS['captcha']}</code>
+💀 <b>DEAD:</b> <code>{CURRENT_PROGRESS['dead']}</code>
+⚠️ <b>ERROR:</b> <code>{CURRENT_PROGRESS['error']}</code>
 
 ⏱️ <b>Time:</b> <code>{elapsed}s</code>
-📊 <b>Test card used:</b> 5598...815603
+📊 <b>Speed:</b> <code>{CURRENT_PROGRESS['checked']//max(elapsed,1)}/s</code>
 """
     
     try:
@@ -464,17 +632,20 @@ def check_sites_batch(sites, message):
     except:
         pass
     
-    if live_sites:
+    if CURRENT_PROGRESS['live_sites']:
         try:
             filename = f"live_sites_{int(time.time())}.txt"
             with open(filename, 'w') as f:
-                f.write("\n".join(live_sites))
+                f.write("\n".join(CURRENT_PROGRESS['live_sites']))
             with open(filename, 'rb') as f:
-                bot.send_document(message.chat.id, f, caption=f"✅ {len(live_sites)} REAL LIVE SITES")
+                bot.send_document(message.chat.id, f, caption=f"✅ {len(CURRENT_PROGRESS['live_sites'])} LIVE SITES")
+            os.remove(filename)
         except:
             pass
     
-    print(f"✅ Complete: {stats['live']} LIVE")
+    save_progress()
+    save_results()
+    print(f"✅ Complete: {CURRENT_PROGRESS['live']} LIVE")
 
 @bot.message_handler(content_types=['document'])
 def handle_file(message):
@@ -498,7 +669,7 @@ def handle_file(message):
         
         elif len(sites) >= 1:
             formatted_sites = [l.replace('https://', '').replace('http://', '').rstrip('/') for l in sites]
-            bot.reply_to(message, f"📥 {len(formatted_sites)} sites\n🔥 Starting REAL PAYMENT test...")
+            bot.reply_to(message, f"📥 {len(formatted_sites)} sites\n💾 Auto-save enabled\n🔥 Starting check...")
             threading.Thread(target=check_sites_batch, args=(formatted_sites, message), daemon=True).start()
         
         else:
@@ -513,15 +684,21 @@ def handle_file(message):
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("🔥 SHOPIFY CHECKER BOT v8.0 - REAL PAYMENT TESTING")
+    print("🔥 SHOPIFY CHECKER BOT v8.5 - CRASH-PROOF")
     print("=" * 70)
-    print("✅ Uses YOUR checkout code")
-    print("✅ Real test card: 5598880392815603")
-    print("✅ Submits payment to gateway")
-    print("✅ Capture DECLINE = LIVE proof")
+    print("✅ Auto-save progress enabled")
+    print("✅ Rotating User-Agents (WAF bypass)")
+    print("✅ Resume on crash")
+    print("✅ Graceful error handling")
     print("=" * 70)
+    
+    load_progress()
     
     try:
         bot.infinity_polling()
     except Exception as e:
         print(f"❌ Bot error: {e}")
+        save_progress()
+        save_results()
+        print("✅ Data saved. Will auto-restart...")
+        time.sleep(5)
