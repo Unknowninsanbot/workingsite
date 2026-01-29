@@ -12,7 +12,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==========================================
 # CONFIG
 # ==========================================
-BOT_TOKEN = "6907835426:AAFUnPXiOE5SaOILXPPRFv6B3LQrol-NQlA"
+BOT_TOKEN = "8468244120:AAGXjaczSUzqCF9xTRtoShEzhmx406XEhCE"
 OWNER_ID = 5963548505
 
 MAX_THREADS = 50
