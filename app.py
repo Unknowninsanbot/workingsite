@@ -8,15 +8,13 @@ import logging
 import gc
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from flask import Flask
 from fake_useragent import UserAgent
 import urllib3
 urllib3.disable_warnings()
 
 # ==========================================
-# 🎯 ULTRA BULK SITE CHECKER v5 - APP.PY METHOD
+# 🎯 ULTRA BULK SITE CHECKER v5.3 - SAFE MODE
 # ==========================================
 BOT_TOKEN = "8468244120:AAGXjaczSUzqCF9xTRtoShEzhmx406XEhCE"
 OWNER_ID = 5963548505
@@ -36,6 +34,14 @@ bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
 PROXY_POOL = []
 VERIFIED_PROXIES = []
 USER_AGENTS = UserAgent()
+
+# Task tracking
+ACTIVE_TASKS = {
+    'proxy_verify': False,
+    'site_check': False,
+    'current_sites': 0,
+    'current_proxies': 0,
+}
 
 # ==========================================
 # 💾 FILE MANAGEMENT
@@ -72,11 +78,14 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"🎯 ULTRA v5 | Verified: {len(VERIFIED_PROXIES)} | App.py Method", 200
+    return f"🎯 ULTRA v5.3 | Verified: {len(VERIFIED_PROXIES)} | Safe Mode", 200
 
 def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
+    try:
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
+    except:
+        pass
 
 def start_keep_alive():
     t = threading.Thread(target=run_web_server, daemon=True)
@@ -140,8 +149,16 @@ def verify_proxy_batch(proxies, message=None):
     """Verify multiple proxies in parallel and AUTO-SAVE"""
     global VERIFIED_PROXIES
     
+    ACTIVE_TASKS['proxy_verify'] = True
+    ACTIVE_TASKS['current_proxies'] = len(proxies)
+    
     if message:
-        status_msg = bot.send_message(message.chat.id, f"⚡ <b>VERIFYING {len(proxies)} PROXIES</b>\n🔄 Testing with {PROXY_CHECK_THREADS} threads...", parse_mode='HTML')
+        try:
+            status_msg = bot.send_message(message.chat.id, f"⚡ <b>VERIFYING {len(proxies)} PROXIES</b>\n🔄 Testing with {PROXY_CHECK_THREADS} threads...", parse_mode='HTML')
+        except:
+            status_msg = None
+    else:
+        status_msg = None
     
     verified = []
     checked = 0
@@ -156,7 +173,7 @@ def verify_proxy_batch(proxies, message=None):
             if future.result():
                 verified.append(futures[future])
             
-            if message and time.time() - last_update > 2:
+            if status_msg and time.time() - last_update > 2:
                 try:
                     pct = int((checked / total) * 100)
                     bot.edit_message_text(
@@ -172,22 +189,27 @@ def verify_proxy_batch(proxies, message=None):
     VERIFIED_PROXIES.extend(verified)
     save_verified_proxies()
     
-    if message:
-        bot.edit_message_text(
-            f"✅ <b>PROXY VERIFICATION COMPLETE!</b>\n\n✅ Verified This Batch: {len(verified)}\n💀 Dead: {total - len(verified)}\n\n📊 <b>TOTAL SAVED:</b> {len(VERIFIED_PROXIES)}\n💾 File: <code>verified_proxies.txt</code>",
-            message.chat.id,
-            status_msg.message_id,
-            parse_mode='HTML'
-        )
+    if status_msg:
+        try:
+            bot.edit_message_text(
+                f"✅ <b>PROXY VERIFICATION COMPLETE!</b>\n\n✅ Verified This Batch: {len(verified)}\n💀 Dead: {total - len(verified)}\n\n📊 <b>TOTAL SAVED:</b> {len(VERIFIED_PROXIES)}\n💾 File: <code>verified_proxies.txt</code>",
+                message.chat.id,
+                status_msg.message_id,
+                parse_mode='HTML'
+            )
+        except:
+            pass
     
+    ACTIVE_TASKS['proxy_verify'] = False
+    ACTIVE_TASKS['current_proxies'] = 0
     return verified
 
 # ==========================================
-# 🔍 SITE CHECKER (APP.PY METHOD)
+# 🔍 SITE CHECKER - DUAL METHOD (API + FALLBACK)
 # ==========================================
 
-def check_site_ultra(site_url, proxy=None):
-    """ULTRA site checker - USING EXTERNAL API (FROM app.py METHOD)"""
+def check_site_ultra(site_url, proxy=None, use_fallback=False):
+    """ULTRA site checker - API (Primary) + Direct (Fallback)"""
     try:
         site_url = site_url.strip()
         if site_url.startswith('https://'):
@@ -196,67 +218,104 @@ def check_site_ultra(site_url, proxy=None):
             site_url = site_url.replace('http://', '')
         site_url = site_url.rstrip('/')
         
-        # Use external API like app.py does
-        test_cc = "5242430428405662|03|2025|328"  # Test card
-        api_url = f"https://autoshopify.stormx.pw/index.php?site={site_url}&cc={test_cc}"
-        
-        headers = {
-            'User-Agent': USER_AGENTS.random,
-            'Accept': 'application/json, text/javascript, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-        
-        try:
-            if proxy:
-                proxy_parts = proxy.split(':')
-                if len(proxy_parts) == 4:
-                    proxy_url = f"http://{proxy_parts[2]}:{proxy_parts[3]}@{proxy_parts[0]}:{proxy_parts[1]}"
-                elif len(proxy_parts) == 2:
-                    proxy_url = f"http://{proxy_parts[0]}:{proxy_parts[1]}"
-                else:
-                    proxy_url = None
+        # METHOD 1: EXTERNAL API (Fast & Safe)
+        if not use_fallback:
+            try:
+                test_cc = "5242430428405662|03|2025|328"
+                api_url = f"https://autoshopify.stormx.pw/index.php?site={site_url}&cc={test_cc}"
                 
-                if proxy_url:
-                    proxy_dict = {'http': proxy_url, 'https': proxy_url}
-                    response = requests.get(api_url, headers=headers, proxies=proxy_dict, timeout=REQUEST_TIMEOUT, verify=False)
+                headers = {
+                    'User-Agent': USER_AGENTS.random,
+                    'Accept': 'application/json, text/javascript, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                }
+                
+                if proxy:
+                    proxy_parts = proxy.split(':')
+                    if len(proxy_parts) == 4:
+                        proxy_url = f"http://{proxy_parts[2]}:{proxy_parts[3]}@{proxy_parts[0]}:{proxy_parts[1]}"
+                    elif len(proxy_parts) == 2:
+                        proxy_url = f"http://{proxy_parts[0]}:{proxy_parts[1]}"
+                    else:
+                        proxy_url = None
+                    
+                    if proxy_url:
+                        proxy_dict = {'http': proxy_url, 'https': proxy_url}
+                        response = requests.get(api_url, headers=headers, proxies=proxy_dict, timeout=REQUEST_TIMEOUT, verify=False)
+                    else:
+                        response = requests.get(api_url, headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
                 else:
                     response = requests.get(api_url, headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
-            else:
-                response = requests.get(api_url, headers=headers, timeout=REQUEST_TIMEOUT, verify=False)
+                
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        api_response = data.get('Response', '').upper()
+                        gateway = data.get('Gateway', 'Unknown')
+                        
+                        if any(x in api_response for x in ["THANK YOU", "APPROVED", "GATEWAY", "SUCCESS"]):
+                            return ("LIVE", "API ✓", gateway)
+                        elif "CAPTCHA" in api_response or "CHALLENGE" in api_response:
+                            return ("CAPTCHA", "API ✓", gateway)
+                        elif "GATED" in api_response or "LOCKED" in api_response or "PAUSED" in api_response:
+                            return ("GATED", "API ✓", gateway)
+                        else:
+                            return ("DEAD", api_response[:30] if api_response else "No Resp", gateway)
+                    except:
+                        return ("DEAD", "JSON Error", "N/A")
+                elif response.status_code == 429:
+                    logger.warning(f"⚠️ API Rate Limited for {site_url}")
+                    return ("DEAD", "API 429", "N/A")
+                else:
+                    return ("DEAD", f"HTTP {response.status_code}", "N/A")
             
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                    api_response = data.get('Response', '').upper()
-                    gateway = data.get('Gateway', 'Unknown')
-                    
-                    # Check responses
-                    if any(x in api_response for x in ["THANK YOU", "APPROVED", "GATEWAY"]):
-                        return ("LIVE", "Gateway Detected", gateway)
-                    elif "CAPTCHA" in api_response or "CHALLENGE" in api_response:
-                        return ("CAPTCHA", "CAPTCHA Protected", gateway)
-                    elif "GATED" in api_response or "LOCKED" in api_response:
-                        return ("GATED", "Products Locked", gateway)
-                    elif any(x in api_response for x in ["DECLINED", "EXPIRED", "INVALID"]):
-                        return ("DEAD", api_response[:30], gateway)
-                    else:
-                        return ("DEAD", api_response[:30], gateway)
-                except:
-                    return ("DEAD", "Invalid Response", "N/A")
-            elif response.status_code == 403:
-                return ("BLOCKED", "IP Blocked", "N/A")
-            elif response.status_code == 404:
-                return ("DEAD", "Not Found", "N/A")
-            else:
-                return ("DEAD", f"HTTP {response.status_code}", "N/A")
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                logger.warning(f"⚠️ API Error for {site_url} - Fallback")
+                return check_site_ultra(site_url, proxy, use_fallback=True)
+            except:
+                return check_site_ultra(site_url, proxy, use_fallback=True)
         
-        except requests.exceptions.Timeout:
-            return ("DEAD", "Timeout", "N/A")
-        except Exception as e:
-            return ("DEAD", str(e)[:20], "N/A")
+        # METHOD 2: DIRECT CHECKOUT CHECK (Fallback)
+        else:
+            try:
+                site_full = f"https://{site_url}"
+                
+                headers = {
+                    'User-Agent': USER_AGENTS.random,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                }
+                
+                if proxy:
+                    proxy_parts = proxy.split(':')
+                    if len(proxy_parts) == 4:
+                        proxy_url = f"http://{proxy_parts[2]}:{proxy_parts[3]}@{proxy_parts[0]}:{proxy_parts[1]}"
+                    elif len(proxy_parts) == 2:
+                        proxy_url = f"http://{proxy_parts[0]}:{proxy_parts[1]}"
+                    else:
+                        proxy_url = None
+                    
+                    if proxy_url:
+                        proxy_dict = {'http': proxy_url, 'https': proxy_url}
+                        r = requests.get(site_full, headers=headers, proxies=proxy_dict, timeout=8, verify=False)
+                    else:
+                        r = requests.get(site_full, headers=headers, timeout=8, verify=False)
+                else:
+                    r = requests.get(site_full, headers=headers, timeout=8, verify=False)
+                
+                if r.status_code == 200 and len(r.text) > 500:
+                    return ("LIVE", "Direct ✓", "Unknown")
+                elif r.status_code == 403:
+                    return ("BLOCKED", "Direct 403", "N/A")
+                elif r.status_code >= 500:
+                    return ("DEAD", "Server Err", "N/A")
+                else:
+                    return ("DEAD", f"HTTP {r.status_code}", "N/A")
+            
+            except:
+                return ("DEAD", "No Response", "N/A")
     
     except Exception as e:
-        return ("ERROR", str(e)[:30], "N/A")
+        return ("ERROR", str(e)[:20], "N/A")
 
 # ==========================================
 # 🧵 ULTRA BULK CHECKER
@@ -265,84 +324,117 @@ def check_site_ultra(site_url, proxy=None):
 def run_ultra_bulk_check(message, sites):
     """ULTRA bulk check with real proxies"""
     
+    ACTIVE_TASKS['site_check'] = True
+    ACTIVE_TASKS['current_sites'] = len(sites)
+    
+    logger.info(f"🎯 Starting bulk check for {len(sites)} sites")
+    
     if not sites:
-        bot.reply_to(message, "❌ No sites to check!", parse_mode='HTML')
+        logger.error("❌ No sites to check")
+        ACTIVE_TASKS['site_check'] = False
         return
     
     if not VERIFIED_PROXIES:
-        bot.reply_to(message, "⚠️ <b>NO VERIFIED PROXIES!</b>\n\n🔌 Upload proxy file and wait for verification!", parse_mode='HTML')
+        logger.error(f"❌ NO VERIFIED PROXIES!")
+        try:
+            bot.send_message(message.chat.id, "⚠️ <b>NO VERIFIED PROXIES!</b>\n\n🔌 Upload proxy file first!", parse_mode='HTML')
+        except:
+            pass
+        ACTIVE_TASKS['site_check'] = False
         return
     
-    bot.reply_to(message, f"🎯 <b>ULTRA CHECKING {len(sites)} SITES</b>\n🔌 Verified Proxies: {len(VERIFIED_PROXIES)}\n⚙️ {MAX_THREADS} Threads\n⏱️ Starting...", parse_mode='HTML')
+    logger.info(f"✅ Starting check with {len(VERIFIED_PROXIES)} proxies (SAFE MODE: API + Fallback)")
+    
+    try:
+        bot.send_message(message.chat.id, f"🎯 <b>ULTRA CHECKING {len(sites)} SITES</b>\n🔌 Verified Proxies: {len(VERIFIED_PROXIES)}\n🛡️ Mode: <code>API + Fallback</code>\n⏱️ Starting...", parse_mode='HTML')
+    except:
+        pass
     
     live_sites = []
-    stats = {'live': 0, 'dead': 0, 'captcha': 0, 'gated': 0, 'blocked': 0, 'error': 0}
+    stats = {'live': 0, 'dead': 0, 'captcha': 0, 'gated': 0, 'blocked': 0, 'error': 0, 'api': 0, 'fallback': 0}
     checked = 0
     total = len(sites)
     
     start_time = time.time()
-    status_msg = bot.send_message(message.chat.id, "🔄 Initializing...", parse_mode='HTML')
+    status_msg = None
+    try:
+        status_msg = bot.send_message(message.chat.id, "🔄 Initializing...", parse_mode='HTML')
+    except:
+        pass
     
     chunks = [sites[i:i+CHUNK_SIZE] for i in range(0, len(sites), CHUNK_SIZE)]
+    logger.info(f"📊 Created {len(chunks)} chunks of {CHUNK_SIZE} sites")
     
-    for chunk_idx, chunk in enumerate(chunks):
-        with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-            futures = {}
-            for site in chunk:
-                proxy = random.choice(VERIFIED_PROXIES) if VERIFIED_PROXIES else None
-                futures[executor.submit(check_site_ultra, site, proxy)] = site
+    try:
+        for chunk_idx, chunk in enumerate(chunks):
+            logger.info(f"Processing chunk {chunk_idx + 1}/{len(chunks)}")
             
-            for future in as_completed(futures):
-                try:
-                    status, msg, gateway = future.result()
-                    site = futures[future]
-                    checked += 1
-                    
-                    if status == "LIVE":
-                        stats['live'] += 1
-                        live_data = f"{site} | {gateway}"
-                        live_sites.append(live_data)
-                        
-                        if len(live_sites) % BATCH_SEND == 0:
-                            send_batch_results(message.chat.id, live_sites[-BATCH_SEND:], stats['live'])
-                    
-                    elif status == "CAPTCHA":
-                        stats['captcha'] += 1
-                    elif status == "GATED":
-                        stats['gated'] += 1
-                    elif status == "BLOCKED":
-                        stats['blocked'] += 1
-                    elif status == "ERROR":
-                        stats['error'] += 1
-                    else:
-                        stats['dead'] += 1
-                    
-                    if checked % 50 == 0:
-                        pct = int((checked / total) * 100)
-                        elapsed = int(time.time() - start_time)
-                        speed = checked // max(elapsed, 1)
-                        
-                        try:
-                            bar = "█" * int(pct/10) + "░" * (10-int(pct/10))
-                            bot.edit_message_text(
-                                f"🔄 <b>ULTRA CHECKING</b>\n\n<code>{bar}</code> {pct}%\n📊 {checked}/{total}\n✅ LIVE: {stats['live']}\n🛡️ CAPTCHA: {stats['captcha']}\n💀 DEAD: {stats['dead']}\n⏱️ {elapsed}s ({speed}/sec)",
-                                message.chat.id,
-                                status_msg.message_id,
-                                parse_mode='HTML'
-                            )
-                        except:
-                            pass
+            with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+                futures = {}
+                for site in chunk:
+                    proxy = random.choice(VERIFIED_PROXIES) if VERIFIED_PROXIES else None
+                    futures[executor.submit(check_site_ultra, site, proxy)] = site
                 
-                except:
-                    pass
+                for future in as_completed(futures):
+                    try:
+                        status, msg, gateway = future.result()
+                        site = futures[future]
+                        checked += 1
+                        
+                        # Track method used
+                        if "API" in msg:
+                            stats['api'] += 1
+                        elif "Direct" in msg:
+                            stats['fallback'] += 1
+                        
+                        if status == "LIVE":
+                            stats['live'] += 1
+                            live_data = f"{site} | {gateway}"
+                            live_sites.append(live_data)
+                            logger.info(f"✅ LIVE: {site} ({msg})")
+                            
+                            if len(live_sites) % BATCH_SEND == 0:
+                                send_batch_results(message.chat.id, live_sites[-BATCH_SEND:], stats['live'])
+                        
+                        elif status == "CAPTCHA":
+                            stats['captcha'] += 1
+                        elif status == "GATED":
+                            stats['gated'] += 1
+                        elif status == "BLOCKED":
+                            stats['blocked'] += 1
+                        elif status == "ERROR":
+                            stats['error'] += 1
+                        else:
+                            stats['dead'] += 1
+                        
+                        if checked % 50 == 0:
+                            pct = int((checked / total) * 100) if total > 0 else 0
+                            elapsed = int(time.time() - start_time)
+                            speed = checked // max(elapsed, 1)
+                            
+                            if status_msg:
+                                try:
+                                    bar = "█" * int(pct/10) + "░" * (10-int(pct/10))
+                                    bot.edit_message_text(
+                                        f"🔄 <b>ULTRA CHECKING</b>\n\n<code>{bar}</code> {pct}%\n📊 {checked}/{total}\n✅ LIVE: {stats['live']}\n🛡️ CAPTCHA: {stats['captcha']}\n💀 DEAD: {stats['dead']}\n⏱️ {elapsed}s ({speed}/sec)",
+                                        message.chat.id,
+                                        status_msg.message_id,
+                                        parse_mode='HTML'
+                                    )
+                                except:
+                                    pass
+                    
+                    except Exception as e:
+                        logger.error(f"Error: {e}")
+            
+            gc.collect()
+            time.sleep(0.2)
         
-        gc.collect()
-        time.sleep(0.2)
-    
-    elapsed = int(time.time() - start_time)
-    speed = total // max(elapsed, 1)
-    
-    final_report = f"""
+        # Final Report
+        elapsed = int(time.time() - start_time)
+        speed = total // max(elapsed, 1)
+        
+        final_report = f"""
 ✅ <b>ULTRA CHECK COMPLETE!</b>
 
 📊 <b>FINAL RESULTS:</b>
@@ -351,19 +443,38 @@ def run_ultra_bulk_check(message, sites):
 🔒 GATED: <code>{stats['gated']}</code>
 ⛔ BLOCKED: <code>{stats['blocked']}</code>
 💀 DEAD: <code>{stats['dead']}</code>
-❌ ERROR: <code>{stats['error']}</code>
 
-📈 Total: <code>{total}</code>
+📈 <b>METHOD STATS:</b>
+🌐 API Used: <code>{stats['api']}</code>
+↩️ Fallback Used: <code>{stats['fallback']}</code>
+
 ⏱️ Time: <code>{elapsed}s</code>
 ⚡ Speed: <code>{speed} sites/sec</code>
-🔌 Verified Proxies: <code>{len(VERIFIED_PROXIES)}</code>
+🔌 Proxies: <code>{len(VERIFIED_PROXIES)}</code>
+🛡️ Mode: <code>Safe (API+Fallback)</code>
 """
+        
+        try:
+            bot.send_message(message.chat.id, final_report, parse_mode='HTML')
+        except:
+            pass
+        
+        if live_sites and len(live_sites) % BATCH_SEND != 0:
+            remaining = len(live_sites) % BATCH_SEND
+            send_batch_results(message.chat.id, live_sites[-remaining:], stats['live'])
+        
+        logger.info(f"✅ Check completed! LIVE: {stats['live']}, API: {stats['api']}, Fallback: {stats['fallback']}")
     
-    bot.send_message(message.chat.id, final_report, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"❌ Bulk check error: {e}")
+        try:
+            bot.send_message(message.chat.id, f"❌ Error: {str(e)[:100]}", parse_mode='HTML')
+        except:
+            pass
     
-    if live_sites and len(live_sites) % BATCH_SEND != 0:
-        remaining = len(live_sites) % BATCH_SEND
-        send_batch_results(message.chat.id, live_sites[-remaining:], stats['live'])
+    finally:
+        ACTIVE_TASKS['site_check'] = False
+        ACTIVE_TASKS['current_sites'] = 0
 
 def send_batch_results(chat_id, sites, total):
     """Send LIVE sites batch"""
@@ -385,15 +496,15 @@ def send_batch_results(chat_id, sites, total):
 @bot.message_handler(commands=['start'])
 def start(m):
     bot.reply_to(m, """
-🎯 <b>ULTRA BULK SITE CHECKER v5</b>
+🎯 <b>ULTRA BULK SITE CHECKER v5.3 - SAFE MODE</b>
 
 ✅ <b>FEATURES:</b>
 • Check 40K+ sites ULTRA FAST
 • 150 parallel threads
 • Proxy verification (100 parallel)
 • 💾 AUTO-SAVE verified proxies
-• External API checking (app.py method)
-• Real gateway detection
+• 🌐 Primary: External API (Fast)
+• ↩️ Fallback: Direct Check (Safe)
 • Advanced CAPTCHA detection
 
 📤 <b>STEP 1:</b> Upload proxy file
@@ -406,12 +517,11 @@ def start(m):
 
 <b>Sites Format:</b>
 <code>example.com</code>
-<code>shop.io</code>
 
 /proxies - View verified proxies
 /load - Load saved proxies
 /clear - Clear all proxies
-/stats - Show stats
+/stats - Show stats & tasks
 """, parse_mode='HTML')
 
 @bot.message_handler(commands=['proxies', 'showproxy'])
@@ -457,16 +567,32 @@ def show_stats(m):
     if str(m.from_user.id) != str(OWNER_ID):
         return
     
+    active_threads = threading.active_count()
+    
     bot.reply_to(m, f"""
-📊 <b>BOT STATS:</b>
+📊 <b>BOT STATS v5.3 - SAFE MODE:</b>
 
-🔌 Proxy Pool: <code>{len(PROXY_POOL)}</code>
-✅ Verified: <code>{len(VERIFIED_PROXIES)}</code>
-💾 Saved File: <code>{VERIFIED_PROXIES_FILE}</code>
-⚙️ Max Threads: <code>{MAX_THREADS}</code>
-🔄 Chunk Size: <code>{CHUNK_SIZE}</code>
-⏱️ Timeout: <code>{REQUEST_TIMEOUT}s</code>
-🔧 Method: <code>External API (app.py)</code>
+🔌 <b>PROXY INFO:</b>
+   • Proxy Pool: <code>{len(PROXY_POOL)}</code>
+   • ✅ Verified: <code>{len(VERIFIED_PROXIES)}</code>
+   • 💾 File: <code>{VERIFIED_PROXIES_FILE}</code>
+
+⚙️ <b>BOT CONFIG:</b>
+   • Max Threads: <code>{MAX_THREADS}</code>
+   • Timeout: <code>{REQUEST_TIMEOUT}s</code>
+   • 🛡️ Mode: <code>API + Fallback</code>
+
+🧵 <b>ACTIVE TASKS:</b>
+   • Total Threads: <code>{active_threads}</code>
+   • Proxy Verify: <code>{'🔴 Running' if ACTIVE_TASKS['proxy_verify'] else '⚪ Idle'}</code>
+   • Site Checking: <code>{'🔴 Running' if ACTIVE_TASKS['site_check'] else '⚪ Idle'}</code>
+
+📈 <b>SAFETY FEATURES:</b>
+   • ✅ Primary API: autoshopify.stormx.pw
+   • ↩️ Fallback: Direct Checkout Check
+   • 🔄 Auto-Failover: If API fails
+   • 📊 Method Tracking: See stats after run
+   • 🚫 Rate Limit: Handled gracefully
 """, parse_mode='HTML')
 
 @bot.message_handler(content_types=['document'])
@@ -476,10 +602,12 @@ def handle_file(m):
         return
     
     try:
+        logger.info(f"📥 File received: {m.document.file_name}")
         file_info = bot.get_file(m.document.file_id)
         data = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore')
         
         lines = [line.strip() for line in data.split('\n') if line.strip()]
+        logger.info(f"📊 File lines: {len(lines)}")
         
         proxy_lines = [l for l in lines if is_proxy_line(l)]
         site_lines = [l for l in lines if is_site_line(l)]
@@ -503,16 +631,18 @@ def handle_file(m):
                     formatted_sites.append(line.replace('https://', '').replace('http://', ''))
             
             bot.reply_to(m, f"📥 <b>✅ {len(formatted_sites)} SITES DETECTED</b>\n🎯 Starting check!", parse_mode='HTML')
+            logger.info(f"Starting bulk check with {len(formatted_sites)} sites")
             threading.Thread(target=run_ultra_bulk_check, args=(m, formatted_sites), daemon=True).start()
         
         else:
             bot.reply_to(m, f"❌ Could not detect!\n\n📊 Found: {len(proxy_lines)} proxies, {len(site_lines)} sites", parse_mode='HTML')
     
     except Exception as e:
+        logger.error(f"File handling error: {e}")
         bot.reply_to(m, f"❌ Error: {str(e)[:100]}", parse_mode='HTML')
 
 if __name__ == "__main__":
     initial_count = load_verified_proxies()
-    logger.info(f"🎯 ULTRA CHECKER v5 STARTED - {initial_count} proxies loaded - Using External API Method")
+    logger.info(f"🎯 ULTRA CHECKER v5.3 STARTED - SAFE MODE (API + Fallback)")
     start_keep_alive()
     bot.infinity_polling()
