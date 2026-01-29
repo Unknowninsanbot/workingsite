@@ -40,7 +40,7 @@ def get_random_user_agent():
 # ==========================================
 # CONFIG & PROGRESS TRACKING
 # ==========================================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "6907835426:AAFUnPXiOE5SaOILXPPRFv6B3LQrol-NQlA"
 OWNER_ID = 5963548505
 MAX_THREADS = 15
 REQUEST_TIMEOUT = 10
