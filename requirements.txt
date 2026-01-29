@@ -1,7 +1,6 @@
 telebot==4.14.0
 requests==2.31.0
-beautifulsoup4==4.12.2
 flask==3.0.0
 fake-useragent==1.4.0
 urllib3==2.1.0
-python-dotenv==1.0.0
+pyTelegramBotAPI==4.14.0
