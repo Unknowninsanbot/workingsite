@@ -16,20 +16,6 @@ import urllib3
 urllib3.disable_warnings()
 
 # ==========================================
-# 🔧 LOGGING SETUP - VERBOSE
-# ==========================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('ultra_bot.log', mode='a')
-    ]
-)
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-# ==========================================
 # 🔧 CONFIG
 # ==========================================
 BOT_TOKEN = "8468244120:AAGXjaczSUzqCF9xTRtoShEzhmx406XEhCE"
@@ -48,6 +34,7 @@ bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
 PROXY_POOL = []
 VERIFIED_PROXIES = []
 USER_AGENTS = UserAgent()
+LOG_CHAT_ID = None  # Will be set on first file upload
 
 ACTIVE_TASKS = {
     'proxy_verify': False,
@@ -57,7 +44,57 @@ ACTIVE_TASKS = {
 }
 
 # ==========================================
-# 🎯 GATEWAY SIGNATURES (From app.py)
+# 📱 TELEGRAM LOGGING HANDLER
+# ==========================================
+class TelegramLogHandler(logging.Handler):
+    def __init__(self, bot, chat_id, buffer_size=5):
+        super().__init__()
+        self.bot = bot
+        self.chat_id = chat_id
+        self.buffer = []
+        self.buffer_size = buffer_size
+        self.last_send = time.time()
+    
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.buffer.append(msg)
+            
+            # Send if buffer full OR 3 seconds passed
+            if len(self.buffer) >= self.buffer_size or (time.time() - self.last_send) > 3:
+                self.flush_buffer()
+        except:
+            pass
+    
+    def flush_buffer(self):
+        if not self.buffer:
+            return
+        try:
+            text = "\n".join(self.buffer[-15:])  # Last 15 lines
+            if len(text) > 4000:
+                text = text[-4000:]
+            self.bot.send_message(self.chat_id, f"<code>{text}</code>", parse_mode='HTML')
+            self.buffer = []
+            self.last_send = time.time()
+        except:
+            pass
+
+# ==========================================
+# 🔧 LOGGING SETUP
+# ==========================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('ultra_bot.log', mode='a')
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# ==========================================
+# 🎯 GATEWAY SIGNATURES
 # ==========================================
 GATEWAY_SIGNATURES = {
     'THANK YOU': 'Approved',
@@ -127,7 +164,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"🔥 ULTRA v10.1 | Verified: {len(VERIFIED_PROXIES)} | Ultimate Mode", 200
+    return f"🔥 ULTRA v10.2 | Verified: {len(VERIFIED_PROXIES)} | Telegram Logs", 200
 
 def run_web_server():
     try:
@@ -247,10 +284,7 @@ def verify_proxy_batch(proxies, message=None):
 # ==========================================
 
 def parse_response(response_text, status_code):
-    """
-    ULTIMATE response parser with CAPTCHA, Gateway, and Status detection
-    Returns: (status, description, gateway)
-    """
+    """ULTIMATE response parser with CAPTCHA, Gateway, and Status detection"""
     if not response_text:
         if status_code == 403:
             return ("BLOCKED", "403 Forbidden - Proxy Blocked", "Unknown")
@@ -263,7 +297,7 @@ def parse_response(response_text, status_code):
     
     response_upper = response_text.upper()
     
-    # 🚨 CAPTCHA DETECTION (MOST IMPORTANT)
+    # 🚨 CAPTCHA DETECTION
     captcha_signals = [
         'RECAPTCHA', 'CAPTCHA', 'BOT CHECK', 'ROBOT CHECK', 
         'VERIFY HUMAN', 'CHALLENGE-REQUIRED', 'CHALLENGE REQUIRED',
@@ -311,9 +345,7 @@ def parse_response(response_text, status_code):
     return ("UNKNOWN", f"Status: {status_code}", "Unknown")
 
 def check_site_v10(site_url, proxy=None):
-    """
-    ULTIMATE V10 site checker - Direct method (NO API overhead)
-    """
+    """ULTIMATE V10 site checker - Direct method"""
     try:
         site_url = site_url.strip()
         if site_url.startswith('https://'):
@@ -369,13 +401,13 @@ def check_site_v10(site_url, proxy=None):
 # ==========================================
 
 def run_ultra_bulk_check(message, sites):
-    """ULTIMATE bulk check with V10 logic - VERBOSE LOGGING"""
+    """ULTIMATE bulk check with V10 logic"""
     
     ACTIVE_TASKS['site_check'] = True
     ACTIVE_TASKS['current_sites'] = len(sites)
     
     logger.info(f"=" * 80)
-    logger.info(f"🔥 STARTING V10.1 CHECK FOR {len(sites)} SITES")
+    logger.info(f"🔥 STARTING V10.2 CHECK FOR {len(sites)} SITES")
     logger.info(f"=" * 80)
     
     if not sites:
@@ -396,7 +428,7 @@ def run_ultra_bulk_check(message, sites):
     logger.info(f"⚙️ Config: {MAX_THREADS} threads, {CHUNK_SIZE} chunk size, {REQUEST_TIMEOUT}s timeout")
     
     try:
-        bot.send_message(message.chat.id, f"🔥 <b>ULTRA v10.1 CHECKING {len(sites)} SITES</b>\n🔌 Proxies: {len(VERIFIED_PROXIES)}\n⚙️ {MAX_THREADS} Threads\n⏱️ Starting...", parse_mode='HTML')
+        bot.send_message(message.chat.id, f"🔥 <b>ULTRA v10.2 CHECKING {len(sites)} SITES</b>\n🔌 Proxies: {len(VERIFIED_PROXIES)}\n⚙️ {MAX_THREADS} Threads\n📱 Logs: LIVE in Telegram\n⏱️ Starting...", parse_mode='HTML')
     except:
         pass
     
@@ -443,25 +475,18 @@ def run_ultra_bulk_check(message, sites):
                                 send_batch_results(message.chat.id, live_sites[-BATCH_SEND:], stats['live'])
                         elif status == "CAPTCHA":
                             stats['captcha'] += 1
-                            logger.info(f"🛡️ CAPTCHA: {site}")
                         elif status == "OTP":
                             stats['otp'] += 1
-                            logger.info(f"🔐 OTP: {site}")
                         elif status == "GATED":
                             stats['gated'] += 1
-                            logger.info(f"🔒 GATED: {site}")
                         elif status == "BLOCKED":
                             stats['blocked'] += 1
-                            logger.info(f"⛔ BLOCKED: {site}")
                         elif status == "ERROR":
                             stats['error'] += 1
-                            logger.info(f"❌ ERROR: {site}")
                         elif status == "UNKNOWN":
                             stats['unknown'] += 1
-                            logger.info(f"❓ UNKNOWN: {site}")
                         else:
                             stats['dead'] += 1
-                            logger.info(f"💀 DEAD: {site}")
                         
                         if checked % 50 == 0:
                             pct = int((checked / total) * 100) if total > 0 else 0
@@ -474,7 +499,7 @@ def run_ultra_bulk_check(message, sites):
                                 try:
                                     bar = "█" * int(pct/10) + "░" * (10-int(pct/10))
                                     bot.edit_message_text(
-                                        f"🔥 <b>V10.1 CHECKING</b>\n<code>{bar}</code> {pct}%\n📊 {checked}/{total}\n✅ LIVE: {stats['live']}\n🛡️ CAPTCHA: {stats['captcha']}\n💀 DEAD: {stats['dead']}\n⏱️ {elapsed}s ({speed}/sec)",
+                                        f"🔥 <b>V10.2 CHECKING</b>\n<code>{bar}</code> {pct}%\n📊 {checked}/{total}\n✅ LIVE: {stats['live']}\n🛡️ CAPTCHA: {stats['captcha']}\n💀 DEAD: {stats['dead']}\n⏱️ {elapsed}s ({speed}/sec)",
                                         message.chat.id,
                                         status_msg.message_id,
                                         parse_mode='HTML'
@@ -504,7 +529,7 @@ def run_ultra_bulk_check(message, sites):
         logger.info(f"=" * 80)
         
         final_report = f"""
-✅ <b>ULTRA v10.1 CHECK COMPLETE!</b>
+✅ <b>ULTRA v10.2 CHECK COMPLETE!</b>
 
 📊 <b>FINAL RESULTS:</b>
 ✅ LIVE: <code>{stats['live']}</code>
@@ -518,7 +543,7 @@ def run_ultra_bulk_check(message, sites):
 ⏱️ Time: <code>{elapsed}s</code>
 ⚡ Speed: <code>{speed} sites/sec</code>
 🔌 Proxies: <code>{len(VERIFIED_PROXIES)}</code>
-🔥 Mode: <code>V10.1 Ultimate + Verbose</code>
+🔥 Mode: <code>V10.2 Telegram Logs</code>
 """
         
         try:
@@ -549,7 +574,7 @@ def send_batch_results(chat_id, sites, total):
         with open(filename, 'w') as f:
             f.write(text)
         with open(filename, 'rb') as f:
-            bot.send_document(chat_id, f, caption=f"✅ V10.1 Live Sites | Total: {total}")
+            bot.send_document(chat_id, f, caption=f"✅ V10.2 Live Sites | Total: {total}")
         os.remove(filename)
         logger.info(f"📤 Batch sent successfully ({len(sites)} sites)")
     except Exception as e:
@@ -562,23 +587,27 @@ def send_batch_results(chat_id, sites, total):
 @bot.message_handler(commands=['start'])
 def start(m):
     bot.reply_to(m, """
-🔥 <b>ULTRA BULK SITE CHECKER v10.1 - ULTIMATE</b>
+🔥 <b>ULTRA BULK SITE CHECKER v10.2 - TELEGRAM LOGS</b>
 
 ✅ <b>FEATURES:</b>
 • Check 40K+ sites ULTRA FAST
 • 200 parallel threads
-• Advanced CAPTCHA detection ✅ NEW
-• Real gateway detection ✅ NEW
-• OTP/3D detection ✅ NEW
+• Advanced CAPTCHA detection ✅
+• Real gateway detection ✅
+• OTP/3D detection ✅
 • Proxy verification (150 parallel)
-• Auto-save verified proxies
-• VERBOSE LOGGING - SEE EVERYTHING ✅ NEW
+• 📱 ALL LOGS → TELEGRAM CHAT ✅ NEW
+• Real-time progress tracking
 • 100% flawless working
 
 📤 <b>STEPS:</b>
 1️⃣ Upload proxy file
 2️⃣ Upload sites file
 3️⃣ Get LIVE results!
+
+📱 <b>LOGS:</b>
+All checking logs appear LIVE in this chat!
+Check progress in real-time!
 
 🔌 <b>Proxy Formats:</b>
 <code>IP:PORT</code>
@@ -639,7 +668,7 @@ def show_stats(m):
     active_threads = threading.active_count()
     
     bot.reply_to(m, f"""
-📊 <b>BOT STATS v10.1 - ULTIMATE:</b>
+📊 <b>BOT STATS v10.2 - TELEGRAM LOGS:</b>
 
 🔌 <b>PROXY INFO:</b>
    • Pool: <code>{len(PROXY_POOL)}</code>
@@ -654,21 +683,32 @@ def show_stats(m):
    • Site Check: <code>{'🔴 Running' if ACTIVE_TASKS['site_check'] else '⚪ Idle'}</code>
    • Proxy Verify: <code>{'🔴 Running' if ACTIVE_TASKS['proxy_verify'] else '⚪ Idle'}</code>
 
-🔥 <b>V10.1 FEATURES:</b>
+🔥 <b>V10.2 FEATURES:</b>
    • ✅ CAPTCHA Detection: Advanced
    • ✅ Gateway Detection: Real
    • ✅ OTP/3D Detection: Full
    • ✅ Concurrent: 200+ parallel
    • ✅ Speed: 500+ sites/min
-   • ✅ Verbose Logging: ENABLED
-   • ✅ Log File: ultra_bot.log
+   • ✅ Telegram Logs: ENABLED
+   • ✅ Real-time Updates: Live Chat
 """, parse_mode='HTML')
 
 @bot.message_handler(content_types=['document'])
 def handle_file(m):
+    global LOG_CHAT_ID
+    
     if str(m.from_user.id) != str(OWNER_ID):
         bot.reply_to(m, "❌ Unauthorized", parse_mode='HTML')
         return
+    
+    # Set log chat ID on first upload
+    if LOG_CHAT_ID is None:
+        LOG_CHAT_ID = m.chat.id
+        # Add telegram handler
+        telegram_handler = TelegramLogHandler(bot, LOG_CHAT_ID, buffer_size=5)
+        telegram_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+        logger.addHandler(telegram_handler)
+        logger.info("📱 Telegram logging ACTIVATED!")
     
     try:
         logger.info(f"📥 File received: {m.document.file_name}")
@@ -685,7 +725,7 @@ def handle_file(m):
         
         if len(proxy_lines) > len(site_lines) and len(proxy_lines) > 0:
             PROXY_POOL.extend(proxy_lines)
-            bot.reply_to(m, f"📥 <b>✅ {len(proxy_lines)} PROXIES</b>\n🔄 Verifying...", parse_mode='HTML')
+            bot.reply_to(m, f"📥 <b>✅ {len(proxy_lines)} PROXIES</b>\n🔄 Verifying...\n📱 Check chat for live logs!", parse_mode='HTML')
             logger.info(f"🔌 Starting proxy verification...")
             threading.Thread(target=verify_proxy_batch, args=(proxy_lines, m), daemon=True).start()
         
@@ -697,7 +737,7 @@ def handle_file(m):
                 else:
                     formatted_sites.append(line.replace('https://', '').replace('http://', ''))
             
-            bot.reply_to(m, f"📥 <b>✅ {len(formatted_sites)} SITES</b>\n🔥 Starting V10.1 check!", parse_mode='HTML')
+            bot.reply_to(m, f"📥 <b>✅ {len(formatted_sites)} SITES</b>\n🔥 Starting V10.2 check!\n📱 Live logs below...", parse_mode='HTML')
             logger.info(f"🌐 Starting check for {len(formatted_sites)} sites...")
             threading.Thread(target=run_ultra_bulk_check, args=(m, formatted_sites), daemon=True).start()
         
@@ -710,7 +750,7 @@ def handle_file(m):
 
 if __name__ == "__main__":
     logger.info("=" * 80)
-    logger.info("🔥 ULTRA CHECKER v10.1 STARTING - ULTIMATE MODE WITH VERBOSE LOGGING")
+    logger.info("🔥 ULTRA CHECKER v10.2 STARTING - TELEGRAM LOGS ENABLED")
     logger.info("=" * 80)
     
     initial_count = load_verified_proxies()
@@ -719,5 +759,6 @@ if __name__ == "__main__":
     start_keep_alive()
     logger.info("✅ Keep-alive server started")
     logger.info("🤖 Bot polling started - ready to receive files!")
+    logger.info("📱 Send files to activate Telegram logging!")
     
     bot.infinity_polling()
