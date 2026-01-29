@@ -740,91 +740,99 @@ def show_stats(m):
 @bot.message_handler(content_types=['document'])
 def handle_file(m):
     """
-    ✅ COMPLETELY FIXED FILE HANDLER
-    Properly detects and processes both proxy and site files
+    ✅ ULTIMATE FIXED FILE HANDLER
+    Handles: Proxies (IP:Port), Sites (domain.com), and varied encodings.
     """
     global LOG_CHAT_ID, TELEGRAM_HANDLER
     
     if str(m.from_user.id) != str(OWNER_ID):
-        bot.reply_to(m, "❌ Unauthorized", parse_mode='HTML')
+        bot.reply_to(m, "❌ <b>Unauthorized Access</b>", parse_mode='HTML')
         return
     
-    # Initialize Telegram logging once
+    # Initialize Telegram logging to the chat if not already set
     if LOG_CHAT_ID is None:
         LOG_CHAT_ID = m.chat.id
-        TELEGRAM_HANDLER = TelegramLogHandler(bot, LOG_CHAT_ID, buffer_size=3)
+        TELEGRAM_HANDLER = TelegramLogHandler(bot, LOG_CHAT_ID, buffer_size=1)
         TELEGRAM_HANDLER.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%H:%M:%S')
         TELEGRAM_HANDLER.setFormatter(formatter)
         logger.addHandler(TELEGRAM_HANDLER)
         logger.info("📱 TELEGRAM LOGGING ACTIVATED!")
-        time.sleep(1)
     
     try:
         logger.info(f"📥 FILE RECEIVED: {m.document.file_name}")
         
         # Download file
         file_info = bot.get_file(m.document.file_id)
-        file_data = bot.download_file(file_info.file_path)
+        file_bytes = bot.download_file(file_info.file_path)
         
-        # Decode file
-        try:
-            data = file_data.decode('utf-8', errors='ignore')
-        except:
-            data = str(file_data, errors='ignore')
+        # --- FIX 1: ROBUST DECODING ---
+        # Try UTF-8 (common), then UTF-16 (Excel exports), then Latin-1 (Legacy)
+        data = None
+        for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'utf-16']:
+            try:
+                data = file_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
         
-        # Parse lines
-        lines = [line.strip() for line in data.split('\n') if line.strip()]
+        if not data:
+            data = str(file_bytes, errors='ignore')
+
+        # Clean lines and remove empty ones
+        lines = [line.strip() for line in data.splitlines() if line.strip()]
         logger.info(f"📊 Total lines read: {len(lines)}")
         
-        # Detect file type
+        if not lines:
+            bot.reply_to(m, "❌ <b>File is empty or unreadable!</b>", parse_mode='HTML')
+            return
+
+        # Detect content
         proxy_lines = [l for l in lines if is_proxy_line(l)]
         site_lines = [l for l in lines if is_site_line(l)]
         
-        logger.info(f"🔍 Detection result: {len(proxy_lines)} proxies, {len(site_lines)} sites")
-        
-        # ✅ FIXED LOGIC: Better detection
-        if len(proxy_lines) > len(site_lines) and len(proxy_lines) >= 5:
-            # It's a PROXY FILE
-            logger.info("✅ File Type: PROXIES")
-            PROXY_POOL.extend(proxy_lines)
+        logger.info(f"🔍 Found: {len(proxy_lines)} proxies | {len(site_lines)} sites")
+
+        # --- FIX 2: PRIORITY LOGIC ---
+        # If the file has any proxies, treat it as a proxy file first
+        if len(proxy_lines) > 0 and (len(proxy_lines) >= len(site_lines) or len(site_lines) < 2):
+            logger.info("✅ ACTION: Verifying Proxies")
             bot.reply_to(
                 m, 
-                f"📥 <b>PROXIES DETECTED!</b>\n✅ Found: {len(proxy_lines)} proxies\n🔄 Starting verification with {PROXY_CHECK_THREADS} threads...", 
+                f"📥 <b>PROXIES DETECTED!</b>\n✅ Found: {len(proxy_lines)}\n🔄 Verifying now...", 
                 parse_mode='HTML'
             )
-            logger.info(f"🔌 Starting proxy verification...")
             threading.Thread(target=verify_proxy_batch, args=(proxy_lines, m), daemon=True).start()
         
-        elif len(site_lines) >= 1:
-            # It's a SITE FILE
-            logger.info("✅ File Type: SITES")
-            formatted_sites = [l.replace('https://', '').replace('http://', '').rstrip('/') for l in site_lines]
+        # Otherwise, if it has sites, process them
+        elif len(site_lines) > 0:
+            logger.info("✅ ACTION: Checking Sites")
+            # Clean site URLs
+            formatted_sites = []
+            for s in site_lines:
+                clean = s.replace('https://', '').replace('http://', '').split('/')[0].strip()
+                if clean: formatted_sites.append(clean)
+            
+            # Remove duplicates
+            unique_sites = list(set(formatted_sites))
             
             bot.reply_to(
                 m, 
-                f"📥 <b>SITES DETECTED!</b>\n✅ Found: {len(formatted_sites)} sites\n🔥 Starting scan with {MAX_THREADS} threads!", 
+                f"📥 <b>SITES DETECTED!</b>\n✅ Unique: {len(unique_sites)}\n🔥 Starting scan...", 
                 parse_mode='HTML'
             )
-            logger.info(f"🌐 Starting site check for {len(formatted_sites)} sites...")
-            threading.Thread(target=run_bulk_check, args=(m, formatted_sites), daemon=True).start()
+            threading.Thread(target=run_bulk_check, args=(m, unique_sites), daemon=True).start()
         
         else:
-            # NO VALID DATA
-            logger.warning(f"❌ No valid data detected!")
             bot.reply_to(
                 m, 
-                f"❌ <b>NO VALID DATA!</b>\n📊 Analysis: {len(proxy_lines)} proxy lines, {len(site_lines)} site lines\n💡 Make sure file is properly formatted", 
+                f"❌ <b>DETECTION FAILED</b>\n\nI saw {len(lines)} lines, but none matched proxy or site formats.\n\n💡 <b>Tip:</b> Proxies should be <code>IP:PORT</code>", 
                 parse_mode='HTML'
             )
-    
-    except Exception as e:
-        logger.error(f"❌ ERROR: {e}")
-        try:
-            bot.reply_to(m, f"❌ Error processing file: {str(e)[:100]}", parse_mode='HTML')
-        except:
-            pass
 
+    except Exception as e:
+        logger.error(f"❌ CRITICAL ERROR: {e}")
+        bot.reply_to(m, f"❌ <b>Error:</b> <code>{str(e)[:100]}</code>", parse_mode='HTML')
 # ==========================================
 # 🚀 MAIN
 # ==========================================
