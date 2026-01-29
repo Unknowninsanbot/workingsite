@@ -8,11 +8,26 @@ import logging
 import gc
 import re
 import json
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask
 from fake_useragent import UserAgent
 import urllib3
 urllib3.disable_warnings()
+
+# ==========================================
+# 🔧 LOGGING SETUP - VERBOSE
+# ==========================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('ultra_bot.log', mode='a')
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # ==========================================
 # 🔧 CONFIG
@@ -28,9 +43,6 @@ PROXY_CHECK_THREADS = 150
 
 VERIFIED_PROXIES_FILE = "verified_proxies.txt"
 WORKING_SITES_FILE = "workingsites.txt"
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
 PROXY_POOL = []
@@ -115,7 +127,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"🔥 ULTRA v10.0 | Verified: {len(VERIFIED_PROXIES)} | Ultimate Mode", 200
+    return f"🔥 ULTRA v10.1 | Verified: {len(VERIFIED_PROXIES)} | Ultimate Mode", 200
 
 def run_web_server():
     try:
@@ -176,6 +188,8 @@ def verify_proxy_batch(proxies, message=None):
     ACTIVE_TASKS['proxy_verify'] = True
     ACTIVE_TASKS['current_proxies'] = len(proxies)
     
+    logger.info(f"🔌 Starting proxy verification for {len(proxies)} proxies")
+    
     if message:
         try:
             status_msg = bot.send_message(message.chat.id, f"⚡ <b>VERIFYING {len(proxies)} PROXIES</b>\n🔄 {PROXY_CHECK_THREADS} threads...", parse_mode='HTML')
@@ -210,6 +224,8 @@ def verify_proxy_batch(proxies, message=None):
     
     VERIFIED_PROXIES.extend(verified)
     save_verified_proxies()
+    
+    logger.info(f"✅ Proxy verification complete! Verified: {len(verified)}/{total}")
     
     if status_msg:
         try:
@@ -353,18 +369,22 @@ def check_site_v10(site_url, proxy=None):
 # ==========================================
 
 def run_ultra_bulk_check(message, sites):
-    """ULTIMATE bulk check with V10 logic"""
+    """ULTIMATE bulk check with V10 logic - VERBOSE LOGGING"""
     
     ACTIVE_TASKS['site_check'] = True
     ACTIVE_TASKS['current_sites'] = len(sites)
     
-    logger.info(f"🔥 Starting V10 check for {len(sites)} sites")
+    logger.info(f"=" * 80)
+    logger.info(f"🔥 STARTING V10.1 CHECK FOR {len(sites)} SITES")
+    logger.info(f"=" * 80)
     
     if not sites:
+        logger.error("❌ No sites to check")
         ACTIVE_TASKS['site_check'] = False
         return
     
     if not VERIFIED_PROXIES:
+        logger.error(f"❌ NO VERIFIED PROXIES!")
         try:
             bot.send_message(message.chat.id, "⚠️ <b>NO VERIFIED PROXIES!</b>\n\n🔌 Upload proxy file first!", parse_mode='HTML')
         except:
@@ -372,8 +392,11 @@ def run_ultra_bulk_check(message, sites):
         ACTIVE_TASKS['site_check'] = False
         return
     
+    logger.info(f"✅ Using {len(VERIFIED_PROXIES)} verified proxies")
+    logger.info(f"⚙️ Config: {MAX_THREADS} threads, {CHUNK_SIZE} chunk size, {REQUEST_TIMEOUT}s timeout")
+    
     try:
-        bot.send_message(message.chat.id, f"🔥 <b>ULTRA v10 CHECKING {len(sites)} SITES</b>\n🔌 Proxies: {len(VERIFIED_PROXIES)}\n⚙️ {MAX_THREADS} Threads\n⏱️ Starting...", parse_mode='HTML')
+        bot.send_message(message.chat.id, f"🔥 <b>ULTRA v10.1 CHECKING {len(sites)} SITES</b>\n🔌 Proxies: {len(VERIFIED_PROXIES)}\n⚙️ {MAX_THREADS} Threads\n⏱️ Starting...", parse_mode='HTML')
     except:
         pass
     
@@ -390,15 +413,19 @@ def run_ultra_bulk_check(message, sites):
         pass
     
     chunks = [sites[i:i+CHUNK_SIZE] for i in range(0, len(sites), CHUNK_SIZE)]
-    logger.info(f"📊 Created {len(chunks)} chunks")
+    logger.info(f"📊 Created {len(chunks)} chunks of {CHUNK_SIZE} sites")
     
     try:
         for chunk_idx, chunk in enumerate(chunks):
+            logger.info(f"📦 Processing chunk {chunk_idx + 1}/{len(chunks)} ({len(chunk)} sites)")
+            
             with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
                 futures = {}
                 for site in chunk:
                     proxy = random.choice(VERIFIED_PROXIES) if VERIFIED_PROXIES else None
                     futures[executor.submit(check_site_v10, site, proxy)] = site
+                
+                logger.info(f"🚀 Submitted {len(futures)} sites for parallel checking")
                 
                 for future in as_completed(futures):
                     try:
@@ -410,34 +437,44 @@ def run_ultra_bulk_check(message, sites):
                             stats['live'] += 1
                             live_data = f"{site} | {gateway}"
                             live_sites.append(live_data)
-                            logger.info(f"✅ LIVE: {site}")
+                            logger.info(f"✅ LIVE: {site} ({gateway})")
                             if len(live_sites) % BATCH_SEND == 0:
+                                logger.info(f"📤 Sending batch of {BATCH_SEND} live sites...")
                                 send_batch_results(message.chat.id, live_sites[-BATCH_SEND:], stats['live'])
                         elif status == "CAPTCHA":
                             stats['captcha'] += 1
+                            logger.info(f"🛡️ CAPTCHA: {site}")
                         elif status == "OTP":
                             stats['otp'] += 1
+                            logger.info(f"🔐 OTP: {site}")
                         elif status == "GATED":
                             stats['gated'] += 1
+                            logger.info(f"🔒 GATED: {site}")
                         elif status == "BLOCKED":
                             stats['blocked'] += 1
+                            logger.info(f"⛔ BLOCKED: {site}")
                         elif status == "ERROR":
                             stats['error'] += 1
+                            logger.info(f"❌ ERROR: {site}")
                         elif status == "UNKNOWN":
                             stats['unknown'] += 1
+                            logger.info(f"❓ UNKNOWN: {site}")
                         else:
                             stats['dead'] += 1
+                            logger.info(f"💀 DEAD: {site}")
                         
                         if checked % 50 == 0:
                             pct = int((checked / total) * 100) if total > 0 else 0
                             elapsed = int(time.time() - start_time)
                             speed = checked // max(elapsed, 1)
                             
+                            logger.info(f"📊 Progress: {checked}/{total} ({pct}%) | LIVE: {stats['live']} | Speed: {speed}/sec")
+                            
                             if status_msg:
                                 try:
                                     bar = "█" * int(pct/10) + "░" * (10-int(pct/10))
                                     bot.edit_message_text(
-                                        f"🔥 <b>V10 CHECKING</b>\n<code>{bar}</code> {pct}%\n📊 {checked}/{total}\n✅ LIVE: {stats['live']}\n🛡️ CAPTCHA: {stats['captcha']}\n💀 DEAD: {stats['dead']}\n⏱️ {elapsed}s ({speed}/sec)",
+                                        f"🔥 <b>V10.1 CHECKING</b>\n<code>{bar}</code> {pct}%\n📊 {checked}/{total}\n✅ LIVE: {stats['live']}\n🛡️ CAPTCHA: {stats['captcha']}\n💀 DEAD: {stats['dead']}\n⏱️ {elapsed}s ({speed}/sec)",
                                         message.chat.id,
                                         status_msg.message_id,
                                         parse_mode='HTML'
@@ -445,7 +482,7 @@ def run_ultra_bulk_check(message, sites):
                                 except:
                                     pass
                     except Exception as e:
-                        logger.error(f"Error: {e}")
+                        logger.error(f"❌ Error processing result: {e}")
             
             gc.collect()
             time.sleep(0.1)
@@ -453,8 +490,21 @@ def run_ultra_bulk_check(message, sites):
         elapsed = int(time.time() - start_time)
         speed = total // max(elapsed, 1)
         
+        logger.info(f"=" * 80)
+        logger.info(f"✅ CHECK COMPLETE!")
+        logger.info(f"📊 FINAL RESULTS:")
+        logger.info(f"   ✅ LIVE: {stats['live']}")
+        logger.info(f"   🛡️ CAPTCHA: {stats['captcha']}")
+        logger.info(f"   🔐 OTP/3D: {stats['otp']}")
+        logger.info(f"   🔒 GATED: {stats['gated']}")
+        logger.info(f"   ⛔ BLOCKED: {stats['blocked']}")
+        logger.info(f"   💀 DEAD: {stats['dead']}")
+        logger.info(f"   ❓ UNKNOWN: {stats['unknown']}")
+        logger.info(f"⏱️ Time: {elapsed}s | Speed: {speed} sites/sec")
+        logger.info(f"=" * 80)
+        
         final_report = f"""
-✅ <b>ULTRA v10 CHECK COMPLETE!</b>
+✅ <b>ULTRA v10.1 CHECK COMPLETE!</b>
 
 📊 <b>FINAL RESULTS:</b>
 ✅ LIVE: <code>{stats['live']}</code>
@@ -468,7 +518,7 @@ def run_ultra_bulk_check(message, sites):
 ⏱️ Time: <code>{elapsed}s</code>
 ⚡ Speed: <code>{speed} sites/sec</code>
 🔌 Proxies: <code>{len(VERIFIED_PROXIES)}</code>
-🔥 Mode: <code>V10 Ultimate</code>
+🔥 Mode: <code>V10.1 Ultimate + Verbose</code>
 """
         
         try:
@@ -478,12 +528,11 @@ def run_ultra_bulk_check(message, sites):
         
         if live_sites and len(live_sites) % BATCH_SEND != 0:
             remaining = len(live_sites) % BATCH_SEND
+            logger.info(f"📤 Sending final batch of {remaining} live sites...")
             send_batch_results(message.chat.id, live_sites[-remaining:], stats['live'])
-        
-        logger.info(f"✅ Check completed! LIVE: {stats['live']}")
     
     except Exception as e:
-        logger.error(f"❌ Error: {e}")
+        logger.error(f"❌ Bulk check error: {e}")
         try:
             bot.send_message(message.chat.id, f"❌ Error: {str(e)[:100]}", parse_mode='HTML')
         except:
@@ -500,10 +549,11 @@ def send_batch_results(chat_id, sites, total):
         with open(filename, 'w') as f:
             f.write(text)
         with open(filename, 'rb') as f:
-            bot.send_document(chat_id, f, caption=f"✅ V10 Live Sites | Total: {total}")
+            bot.send_document(chat_id, f, caption=f"✅ V10.1 Live Sites | Total: {total}")
         os.remove(filename)
+        logger.info(f"📤 Batch sent successfully ({len(sites)} sites)")
     except Exception as e:
-        logger.error(f"Send error: {e}")
+        logger.error(f"❌ Send error: {e}")
 
 # ==========================================
 # 🤖 BOT HANDLERS
@@ -512,7 +562,7 @@ def send_batch_results(chat_id, sites, total):
 @bot.message_handler(commands=['start'])
 def start(m):
     bot.reply_to(m, """
-🔥 <b>ULTRA BULK SITE CHECKER v10.0 - ULTIMATE</b>
+🔥 <b>ULTRA BULK SITE CHECKER v10.1 - ULTIMATE</b>
 
 ✅ <b>FEATURES:</b>
 • Check 40K+ sites ULTRA FAST
@@ -522,7 +572,7 @@ def start(m):
 • OTP/3D detection ✅ NEW
 • Proxy verification (150 parallel)
 • Auto-save verified proxies
-• Real-time progress tracking
+• VERBOSE LOGGING - SEE EVERYTHING ✅ NEW
 • 100% flawless working
 
 📤 <b>STEPS:</b>
@@ -589,7 +639,7 @@ def show_stats(m):
     active_threads = threading.active_count()
     
     bot.reply_to(m, f"""
-📊 <b>BOT STATS v10.0 - ULTIMATE:</b>
+📊 <b>BOT STATS v10.1 - ULTIMATE:</b>
 
 🔌 <b>PROXY INFO:</b>
    • Pool: <code>{len(PROXY_POOL)}</code>
@@ -604,12 +654,14 @@ def show_stats(m):
    • Site Check: <code>{'🔴 Running' if ACTIVE_TASKS['site_check'] else '⚪ Idle'}</code>
    • Proxy Verify: <code>{'🔴 Running' if ACTIVE_TASKS['proxy_verify'] else '⚪ Idle'}</code>
 
-🔥 <b>V10 FEATURES:</b>
+🔥 <b>V10.1 FEATURES:</b>
    • ✅ CAPTCHA Detection: Advanced
    • ✅ Gateway Detection: Real
    • ✅ OTP/3D Detection: Full
    • ✅ Concurrent: 200+ parallel
    • ✅ Speed: 500+ sites/min
+   • ✅ Verbose Logging: ENABLED
+   • ✅ Log File: ultra_bot.log
 """, parse_mode='HTML')
 
 @bot.message_handler(content_types=['document'])
@@ -619,21 +671,22 @@ def handle_file(m):
         return
     
     try:
-        logger.info(f"📥 File: {m.document.file_name}")
+        logger.info(f"📥 File received: {m.document.file_name}")
         file_info = bot.get_file(m.document.file_id)
         data = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore')
         
         lines = [line.strip() for line in data.split('\n') if line.strip()]
-        logger.info(f"📊 Lines: {len(lines)}")
+        logger.info(f"📊 File contains {len(lines)} lines")
         
         proxy_lines = [l for l in lines if is_proxy_line(l)]
         site_lines = [l for l in lines if is_site_line(l)]
         
-        logger.info(f"Detected: {len(proxy_lines)} proxies, {len(site_lines)} sites")
+        logger.info(f"📋 Detected: {len(proxy_lines)} proxies, {len(site_lines)} sites")
         
         if len(proxy_lines) > len(site_lines) and len(proxy_lines) > 0:
             PROXY_POOL.extend(proxy_lines)
             bot.reply_to(m, f"📥 <b>✅ {len(proxy_lines)} PROXIES</b>\n🔄 Verifying...", parse_mode='HTML')
+            logger.info(f"🔌 Starting proxy verification...")
             threading.Thread(target=verify_proxy_batch, args=(proxy_lines, m), daemon=True).start()
         
         elif len(site_lines) > 0:
@@ -644,18 +697,27 @@ def handle_file(m):
                 else:
                     formatted_sites.append(line.replace('https://', '').replace('http://', ''))
             
-            bot.reply_to(m, f"📥 <b>✅ {len(formatted_sites)} SITES</b>\n🔥 Starting V10 check!", parse_mode='HTML')
+            bot.reply_to(m, f"📥 <b>✅ {len(formatted_sites)} SITES</b>\n🔥 Starting V10.1 check!", parse_mode='HTML')
+            logger.info(f"🌐 Starting check for {len(formatted_sites)} sites...")
             threading.Thread(target=run_ultra_bulk_check, args=(m, formatted_sites), daemon=True).start()
         
         else:
             bot.reply_to(m, f"❌ Could not detect!\n\n📊 Found: {len(proxy_lines)} proxies, {len(site_lines)} sites", parse_mode='HTML')
     
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"❌ File handling error: {e}")
         bot.reply_to(m, f"❌ Error: {str(e)[:100]}", parse_mode='HTML')
 
 if __name__ == "__main__":
+    logger.info("=" * 80)
+    logger.info("🔥 ULTRA CHECKER v10.1 STARTING - ULTIMATE MODE WITH VERBOSE LOGGING")
+    logger.info("=" * 80)
+    
     initial_count = load_verified_proxies()
-    logger.info(f"🔥 ULTRA CHECKER v10.0 STARTED - ULTIMATE MODE")
+    logger.info(f"✅ Loaded {initial_count} proxies from file")
+    
     start_keep_alive()
+    logger.info("✅ Keep-alive server started")
+    logger.info("🤖 Bot polling started - ready to receive files!")
+    
     bot.infinity_polling()
